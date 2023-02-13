@@ -23,11 +23,13 @@ static void NV21_YUV420P(const unsigned char *image_src, unsigned char *image_ds
                          int image_width, int image_height)
 {
     unsigned char *p = image_dst;
-    memcpy(p, image_src, image_width * image_height * 3 / 2);
+    memcpy(p, image_src, (image_width * image_height * 3) >> 1);
+
     const unsigned char *pNV = image_src + image_width * image_height;
     unsigned char *pU = p + image_width * image_height;
     unsigned char *pV = p + image_width * image_height + ((image_width * image_height) >> 2);
-    for (int i = 0; i < (image_width * image_height) / 2; i++)
+
+    for (int i = 0; i < (image_width * image_height) >> 1; i++)
     {
         if ((i % 2) == 0)
             *pV++ = *(pNV + i);
@@ -38,24 +40,32 @@ static void NV21_YUV420P(const unsigned char *image_src, unsigned char *image_ds
 
 static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
 {
-    int size = frame_out->width * frame_out->height;
-    unsigned char p[size * 3 / 2];
-    av_image_copy_to_buffer(p, size * 3 / 2, frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width, frame_out->height, 1);
-     
-    unsigned char *pNV = image_dst + size;
-    unsigned char* pU = p + size;
-    unsigned char* pV = p + size + (size >> 2);
+    int shape = frame_out->width * frame_out->height;
+    int size = (shape * 3) >> 1;
+    unsigned char p[size];
+    av_image_copy_to_buffer(p, size, frame_out->data,
+                            frame_out->linesize,
+                            AV_PIX_FMT_YUV420P,
+                            frame_out->width,
+                            frame_out->height,
+                            1);
 
-    memcpy(image_dst, p, size);
-    for (int i = 0; i < (size >> 1); i++)
+    unsigned char *pNV = image_dst + shape;
+    unsigned char *pU = p + shape;
+    unsigned char *pV = p + shape + (shape >> 2);
+
+    memcpy(image_dst, p, shape);
+    for (int i = 0; i < (shape >> 1); i++)
     {
-      if (i % 2 == 0) {
-        *pNV++ = *pV++;
-      } else {
-        *pNV++ = *pU++;
-      }
+        if (i % 2 == 0)
+        {
+            *pNV++ = *pV++;
+        }
+        else
+        {
+            *pNV++ = *pU++;
+        }
     }
-
 }
 
 int main(int argc, char **argv)
@@ -63,14 +73,14 @@ int main(int argc, char **argv)
     int ret;
     AVFrame *frame_in;
     AVFrame *frame_out;
-    unsigned char *input_frame;
+
     unsigned char *frame_buffer_out;
 
     AVFilterContext *buffersink_ctx;
     AVFilterContext *buffersrc_ctx;
     AVFilterGraph *filter_graph;
 
-    // Input YUV
+    // Input NV21
     FILE *fp_in = fopen(argv[1], "rb+");
     if (fp_in == NULL)
     {
@@ -80,7 +90,7 @@ int main(int argc, char **argv)
     int in_width = 1024;
     int in_height = 576;
 
-    // Output YUV
+    // Output NV21
     FILE *fp_out = fopen(argv[2], "wb+");
     if (fp_out == NULL)
     {
@@ -101,8 +111,14 @@ int main(int argc, char **argv)
     filter_graph = avfilter_graph_alloc();
 
     /* buffer video source: the decoded frames from the decoder will be inserted here. */
-    snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d", in_width, in_height, AV_PIX_FMT_YUV420P,
-             1, 25, 1, 1);
+    snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
+             in_width,
+             in_height,
+             AV_PIX_FMT_YUV420P,
+             1,
+             25,
+             1,
+             1);
 
     ret = avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in",
                                        args, NULL, filter_graph);
@@ -143,25 +159,26 @@ int main(int argc, char **argv)
         return ret;
 
     frame_in = av_frame_alloc();
-    unsigned char *frame_buffer = (unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_YUV420P, in_width, in_height, 1));
-    input_frame = (unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_NV21, in_width, in_height, 1));
+    int image_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, in_width, in_height, 1);
+
+    unsigned char *frame_buffer = (unsigned char *)av_malloc(image_buffer_size);
     av_image_fill_arrays(frame_in->data, frame_in->linesize, frame_buffer,
                          AV_PIX_FMT_YUV420P, in_width, in_height, 1);
 
     frame_out = av_frame_alloc();
-    frame_buffer_out = (unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_YUV420P, in_width, in_height, 1));
+    frame_buffer_out = (unsigned char *)av_malloc(image_buffer_size);
     av_image_fill_arrays(frame_out->data, frame_out->linesize, frame_buffer_out,
                          AV_PIX_FMT_YUV420P, in_width, in_height, 1);
 
     frame_in->width = in_width;
     frame_in->height = in_height;
     frame_in->format = AV_PIX_FMT_YUV420P;
-    printf("linesize[0] %d linesize[1] %d linesize[2] %d\n", frame_in->linesize[0], frame_in->linesize[1], frame_in->linesize[2]);
 
+    unsigned char *input_frame = (unsigned char *)av_malloc(av_image_get_buffer_size(AV_PIX_FMT_NV21, in_width, in_height, 1));
+    int output_size = (in_width * in_height * 3) >> 1;
     while (1)
     {
-
-        if (fread(input_frame, 1, in_width * in_height * 3 / 2, fp_in) != in_width * in_height * 3 / 2)
+        if (fread(input_frame, 1, output_size, fp_in) != output_size)
         {
             break;
         }
@@ -170,7 +187,7 @@ int main(int argc, char **argv)
         // input Y,U,V
         frame_in->data[0] = frame_buffer;
         frame_in->data[1] = frame_buffer + in_width * in_height;
-        frame_in->data[2] = frame_buffer + in_width * in_height * 5 / 4;
+        frame_in->data[2] = frame_buffer + ((in_width * in_height * 5) >> 2);
 
         if (av_buffersrc_add_frame(buffersrc_ctx, frame_in) < 0)
         {
@@ -183,10 +200,9 @@ int main(int argc, char **argv)
         if (ret < 0)
             break;
 
-         
-        unsigned char dest[in_width * in_height * 3 / 2];
+        unsigned char dest[output_size];
         YUV420P_NV21(frame_out, dest);
-        fwrite(dest, 1, in_height * in_width * 3 / 2, fp_out);
+        fwrite(dest, 1, output_size, fp_out);
 
         printf("Process 1 frame!\n");
         av_frame_unref(frame_out);
