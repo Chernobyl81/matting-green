@@ -1,0 +1,6 @@
+{
+    "files.associations": {
+        "avformat.h": "c",
+        "imgutils.h": "c"
+    }
+}
