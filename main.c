@@ -12,7 +12,7 @@
 #include <libavutil/imgutils.h>
 
 /**
- * @brief YYYYYYYYU1V1U2V2 to YYYYYYYYU1U2V1V2
+ * @brief
  *
  * @param image_src
  * @param image_dst
@@ -39,21 +39,20 @@ static void NV21_YUV420P(const unsigned char *image_src, unsigned char *image_ds
 static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
 {
     int size = frame_out->width * frame_out->height;
-    unsigned char p[size *3 / 2];
-    av_image_copy_to_buffer(p, size * 3 /2, frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width, frame_out->height, 1);
+    unsigned char p[size * 3 / 2];
+    av_image_copy_to_buffer(p, size * 3 / 2, frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width, frame_out->height, 1);
      
     unsigned char *pNV = image_dst + size;
     unsigned char* pU = p + size;
     unsigned char* pV = p + size + (size >> 2);
 
-
-    memmove(image_dst, p, size);
-    for (int i = 0; i < size >> 1 ; i++)
+    memcpy(image_dst, p, size);
+    for (int i = 0; i < (size >> 1); i++)
     {
       if (i % 2 == 0) {
-        *(pNV + i) = *(pV + i);
+        *pNV++ = *pV++;
       } else {
-        *(pNV + i) = *(pU + i - 1);
+        *pNV++ = *pU++;
       }
     }
 
@@ -184,29 +183,9 @@ int main(int argc, char **argv)
         if (ret < 0)
             break;
 
-
-        // output Y,U,V
-        // if (frame_out->format == AV_PIX_FMT_YUV420P)
-        // {
-        //     printf("frame_out linesize[0] %d linesize[1] %d linesize[2] %d\n", frame_out->linesize[0], frame_out->linesize[1], frame_out->linesize[2]);
-        //     for (int i = 0; i < frame_out->height; i++)
-        //     {
-        //         fwrite(frame_out->data[0] + frame_out->linesize[0] * i, 1, frame_out->width, fp_out);
-        //     }
-        //     for (int i = 0; i < frame_out->height / 2; i++)
-        //     {
-        //         fwrite(frame_out->data[1] + frame_out->linesize[1] * i, 1, frame_out->width / 2, fp_out);
-        //     }
-        //     for (int i = 0; i < frame_out->height / 2; i++)
-        //     {
-        //         fwrite(frame_out->data[2] + frame_out->linesize[2] * i, 1, frame_out->width / 2, fp_out);
-        //     }
-        // }
-
          
         unsigned char dest[in_width * in_height * 3 / 2];
-        // YUV420P_NV21(frame_out, dest);
-        av_image_copy_to_buffer(dest, frame_out->width * frame_out->height * 3 /2, frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width, frame_out->height, 1);
+        YUV420P_NV21(frame_out, dest);
         fwrite(dest, 1, in_height * in_width * 3 / 2, fp_out);
 
         printf("Process 1 frame!\n");
