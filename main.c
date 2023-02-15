@@ -10,6 +10,11 @@
 #include <libavutil/pixdesc.h>
 #include <libavutil/imgutils.h>
 
+static void open_bg(const char* path)
+{
+    
+}
+
 /**
  * @brief
  *
