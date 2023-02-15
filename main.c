@@ -144,11 +144,12 @@ static int open_input_file(const char *filename)
     return 0;
 }
 
-static void decode_jpg(const char* filename)
+static void decode_jpg(const char *filename)
 {
     int ret;
 
-    if (open_input_file(filename) < 0) {
+    if (open_input_file(filename) < 0)
+    {
         av_log(NULL, AV_LOG_ERROR, "can not open file\n");
     }
     AVPacket *pkt = av_packet_alloc();
@@ -158,7 +159,8 @@ static void decode_jpg(const char* filename)
         goto end;
     }
 
-    if ((ret = av_read_frame(ifmt_ctx, pkt)) < 0 ) {
+    if ((ret = av_read_frame(ifmt_ctx, pkt)) < 0)
+    {
         av_log(NULL, AV_LOG_ERROR, "can not read frame\n");
         goto end;
     }
@@ -168,9 +170,6 @@ static void decode_jpg(const char* filename)
     avcodec_send_packet(stream->dec_ctx, pkt);
     avcodec_receive_frame(stream->dec_ctx, stream->dec_frame);
 
-    
-    av_log(NULL, AV_LOG_DEBUG, "pix format %d\n", stream->dec_frame->format);
-
 end:
     av_packet_free(&pkt);
     for (int i = 0; i < ifmt_ctx->nb_streams; i++)
@@ -178,15 +177,91 @@ end:
         avcodec_free_context(&stream_ctx[i].dec_ctx);
         av_frame_free(&stream_ctx[i].dec_frame);
     }
-  
     av_free(stream_ctx);
     avformat_close_input(&ifmt_ctx);
+}
+
+AVFilterContext **inputContexts;
+AVFilterContext *outputContext;
+AVFilterGraph *graph;
+
+static int initFilters(AVFrame *bgFrame, int inputCount, AVCodecContext **codecContexts)
+{
+    av_log(NULL, AV_LOG_DEBUG, "background size %dx%d\n", bgFrame->width, bgFrame->height);
+    int i;
+    int returnCode;
+    char filters[1024];
+    AVFilterInOut *gis = NULL;
+    AVFilterInOut *gos = NULL;
+
+    graph = avfilter_graph_alloc();
+    if (graph == NULL)
+    {
+        printf("Cannot allocate filter graph.");
+        return -1;
+    }
+
+    // build the filters string here
+    snprintf(filters, sizeof(filters),
+             "buffer=video_size=1920x1080:pix_fmt=0:time_base=1/25:pixel_aspect=3937/3937[in_1];\
+    buffer=video_size=1920x1080:pix_fmt=0:time_base=1/180000:pixel_aspect=0/1[in_2];\
+    [in_1][in_2]overlay=0:0[result];[result]buffersink");
+
+    returnCode = avfilter_graph_parse2(graph, filters, &gis, &gos);
+    if (returnCode < 0)
+    {
+        av_log(NULL, AV_LOG_ERROR, "Cannot parse graph %d\n", returnCode);
+        return returnCode;
+    }
+
+    returnCode = avfilter_graph_config(graph, NULL);
+    if (returnCode < 0)
+    {
+        av_log(NULL, AV_LOG_ERROR, "Cannot configure graph %d\n", returnCode);
+        return returnCode;
+    }
+
+    av_log(NULL, AV_LOG_INFO, "Success init filter with return code %d\n", returnCode);
+    // get the filter contexts from the graph here
+    inputContexts = graph->filters;
+    
+    return 0;
 }
 
 int main(int argc, char **argv)
 {
     av_log_set_level(AV_LOG_DEBUG);
-    decode_jpg(argv[1]);
+    FILE *fp_in = fopen(argv[1], "rb+");
+    if (fp_in == NULL)
+    {
+        printf("Error open input file.\n");
+        return -1;
+    }
+
+    AVFrame *bg_frame = NULL;
+    bg_frame = av_frame_alloc();
+    int image_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, 1920, 1080, 1);
+    unsigned char *frame_buffer = (unsigned char *)av_malloc(image_buffer_size);
+    av_image_fill_arrays(bg_frame->data, bg_frame->linesize, frame_buffer,
+                         AV_PIX_FMT_YUV420P, 1920, 1080, 1);
+
+    bg_frame->width = 1920;
+    bg_frame->height = 1080;
+    bg_frame->format = AV_PIX_FMT_YUV420P;
+
+    fread(frame_buffer, 1, 1920 * 1080 * 3 / 2, fp_in);
+    bg_frame->data[0] = frame_buffer;
+    bg_frame->data[1] = frame_buffer + 1920 * 1080;
+    bg_frame->data[2] = frame_buffer + ((1920 * 1080 * 5) >> 2);
+
+    initFilters(bg_frame, 0, NULL);
+
+    if (av_buffersrc_add_frame(inputContexts[0], bg_frame) < 0)
+    {
+        printf("Error while add frame.\n");
+        exit(EXIT_FAILURE);  
+    }
+
     // int ret;
     // AVFrame *frame_in;
     // AVFrame *frame_out;
