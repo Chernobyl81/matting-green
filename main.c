@@ -19,6 +19,11 @@ typedef struct StreamContext
     AVFrame *dec_frame;
 } StreamContext;
 static StreamContext *stream_ctx;
+
+static AVFilterContext **inputContexts;
+static AVFilterContext *outputContext;
+static AVFilterGraph *graph;
+
 /**
  * @brief
  *
@@ -54,6 +59,8 @@ static void NV21_YUV420P(const unsigned char *image_src, unsigned char *image_ds
  */
 static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
 {
+    av_log(NULL, AV_LOG_DEBUG, "Convert YUV420P to NV21\n");
+
     int shape = frame_out->width * frame_out->height;
 
     unsigned char *pY = frame_out->data[0];
@@ -73,6 +80,9 @@ static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
             *pNV++ = *pU++;
         }
     }
+    // av_image_copy_to_buffer(image_dst, frame_out->width * frame_out->height * 3 / 2,
+    //                         frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width,
+    //                         frame_out->height, 1);
 }
 
 static int open_input_file(const char *filename)
@@ -181,16 +191,11 @@ end:
     avformat_close_input(&ifmt_ctx);
 }
 
-AVFilterContext **inputContexts;
-AVFilterContext *outputContext;
-AVFilterGraph *graph;
-
-static int initFilters(AVFrame *bgFrame, int inputCount, AVCodecContext **codecContexts)
+static int initFilters(int bg_width, int bg_height, int video_width, int video_height)
 {
-    av_log(NULL, AV_LOG_DEBUG, "background size %dx%d\n", bgFrame->width, bgFrame->height);
     int i;
     int returnCode;
-    char filters[1024];
+    char filter_specs[1024];
     AVFilterInOut *gis = NULL;
     AVFilterInOut *gos = NULL;
 
@@ -201,13 +206,13 @@ static int initFilters(AVFrame *bgFrame, int inputCount, AVCodecContext **codecC
         return -1;
     }
 
-    // build the filters string here
-    snprintf(filters, sizeof(filters),
-             "buffer=video_size=1920x1080:pix_fmt=0:time_base=1/25:pixel_aspect=3937/3937[in_1];\
-    buffer=video_size=1920x1080:pix_fmt=0:time_base=1/180000:pixel_aspect=0/1[in_2];\
-    [in_1][in_2]overlay=0:0[result];[result]buffersink");
+    snprintf(filter_specs, sizeof(filter_specs),
+             "buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_1];\
+    buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_2];\
+    [in_2]chromakey=0x008c45:0.15:0.1[ckout];[in_1][ckout]overlay[out];[out]buffersink",
+             bg_width, bg_height, AV_PIX_FMT_YUV420P, video_width, video_height, AV_PIX_FMT_YUV420P);
 
-    returnCode = avfilter_graph_parse2(graph, filters, &gis, &gos);
+    returnCode = avfilter_graph_parse2(graph, filter_specs, &gis, &gos);
     if (returnCode < 0)
     {
         av_log(NULL, AV_LOG_ERROR, "Cannot parse graph %d\n", returnCode);
@@ -221,16 +226,32 @@ static int initFilters(AVFrame *bgFrame, int inputCount, AVCodecContext **codecC
         return returnCode;
     }
 
-    av_log(NULL, AV_LOG_INFO, "Success init filter with return code %d\n", returnCode);
+    av_log(NULL, AV_LOG_DEBUG, "Graph %s\n", avfilter_graph_dump(graph, NULL));
+    
     // get the filter contexts from the graph here
     inputContexts = graph->filters;
-    
+    outputContext = graph->filters[graph->nb_filters - 1];
+    if (!outputContext)
+    {
+        av_log(NULL, AV_LOG_ERROR, "outputContext is NULL\n");
+    }
     return 0;
 }
 
 int main(int argc, char **argv)
 {
     av_log_set_level(AV_LOG_DEBUG);
+
+    if (argc < 4)
+    {
+        av_log(NULL, AV_LOG_ERROR, "Usage: <background yuv> <NV21 source file> <NV21 output file>\n ");
+        exit(EXIT_FAILURE);
+    }
+
+    int video_width = 1024;
+    int video_height = 576;
+
+    // Open background yuv file
     FILE *fp_in = fopen(argv[1], "rb+");
     if (fp_in == NULL)
     {
@@ -238,176 +259,115 @@ int main(int argc, char **argv)
         return -1;
     }
 
+    int bg_width = 1024;
+    int bg_height = 576;
+    int bg_size = bg_width * bg_height;
+
     AVFrame *bg_frame = NULL;
     bg_frame = av_frame_alloc();
-    int image_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, 1920, 1080, 1);
-    unsigned char *frame_buffer = (unsigned char *)av_malloc(image_buffer_size);
-    av_image_fill_arrays(bg_frame->data, bg_frame->linesize, frame_buffer,
-                         AV_PIX_FMT_YUV420P, 1920, 1080, 1);
 
-    bg_frame->width = 1920;
-    bg_frame->height = 1080;
+    int bg_frame_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, bg_width, bg_height, 1);
+    unsigned char *bg_frame_buffer = (unsigned char *)av_malloc(bg_frame_buffer_size);
+    av_image_fill_arrays(bg_frame->data, bg_frame->linesize, bg_frame_buffer,
+                         AV_PIX_FMT_YUV420P, bg_width, bg_height, 1);
+
+    bg_frame->width = bg_width;
+    bg_frame->height = bg_height;
     bg_frame->format = AV_PIX_FMT_YUV420P;
 
-    fread(frame_buffer, 1, 1920 * 1080 * 3 / 2, fp_in);
-    bg_frame->data[0] = frame_buffer;
-    bg_frame->data[1] = frame_buffer + 1920 * 1080;
-    bg_frame->data[2] = frame_buffer + ((1920 * 1080 * 5) >> 2);
+    fread(bg_frame_buffer, 1, bg_size * 3 / 2, fp_in);
+    bg_frame->data[0] = bg_frame_buffer;
+    bg_frame->data[1] = bg_frame_buffer + bg_size;
+    bg_frame->data[2] = bg_frame_buffer + ((bg_size * 5) >> 2);
 
-    initFilters(bg_frame, 0, NULL);
+    initFilters(bg_width, bg_height, video_width, video_height);
 
-    if (av_buffersrc_add_frame(inputContexts[0], bg_frame) < 0)
+    int ret;
+    AVFrame *video_frame;
+    AVFrame *frame_out;
+    unsigned char *frame_buffer_out;
+
+    // Input NV21
+    FILE *fp_in_nv21 = fopen(argv[2], "rb+");
+    if (fp_in_nv21 == NULL)
     {
-        printf("Error while add frame.\n");
-        exit(EXIT_FAILURE);  
+        printf("Error open input file.\n");
+        return -1;
     }
 
-    // int ret;
-    // AVFrame *frame_in;
-    // AVFrame *frame_out;
+    // Output NV21
+    FILE *fp_out = fopen(argv[3], "wb+");
+    if (fp_out == NULL)
+    {
+        printf("Error open output file.\n");
+        return -1;
+    }
 
-    // unsigned char *frame_buffer_out;
+    video_frame = av_frame_alloc();
+    int image_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, video_width, video_height, 1);
 
-    // AVFilterContext *buffersink_ctx;
-    // AVFilterContext *buffersrc_ctx;
-    // AVFilterGraph *filter_graph;
+    unsigned char *frame_buffer = (unsigned char *)av_malloc(image_buffer_size);
+    av_image_fill_arrays(video_frame->data, video_frame->linesize, frame_buffer,
+                         AV_PIX_FMT_YUV420P, video_width, video_height, 1);
 
-    // // Input NV21
-    // FILE *fp_in = fopen(argv[1], "rb+");
-    // if (fp_in == NULL)
-    // {
-    //     printf("Error open input file.\n");
-    //     return -1;
-    // }
-    // int in_width = 1024;
-    // int in_height = 576;
+    frame_out = av_frame_alloc();
+    frame_buffer_out = (unsigned char *)av_malloc(image_buffer_size);
+    av_image_fill_arrays(frame_out->data, frame_out->linesize, frame_buffer_out,
+                         AV_PIX_FMT_YUV420P, video_width, video_height, 1);
 
-    // // Output NV21
-    // FILE *fp_out = fopen(argv[2], "wb+");
-    // if (fp_out == NULL)
-    // {
-    //     printf("Error open output file.\n");
-    //     return -1;
-    // }
+    video_frame->width = video_width;
+    video_frame->height = video_height;
+    video_frame->format = AV_PIX_FMT_YUV420P;
 
-    // const char *filter_descr = "boxblur";
+    unsigned char *input_frame = (unsigned char *)av_malloc(
+        av_image_get_buffer_size(AV_PIX_FMT_NV21, video_width, video_height, 1));
 
-    // char args[512];
-    // snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=%d/%d:pixel_aspect=%d/%d",
-    //          in_width,
-    //          in_height,
-    //          AV_PIX_FMT_YUV420P,
-    //          1,
-    //          25,
-    //          1,
-    //          1);
-    // AVFilter const *buffersrc = avfilter_get_by_name("buffer");
+    int output_size = (video_width * video_height * 3) >> 1;
     // AVFilter const *buffersink = avfilter_get_by_name("buffersink");
-    // AVFilterInOut *outputs = avfilter_inout_alloc();
-    // AVFilterInOut *inputs = avfilter_inout_alloc();
-    // enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
-    // AVBufferSinkParams *buffersink_params;
+    while (1)
+    {
+        if (fread(input_frame, 1, output_size, fp_in_nv21) != output_size)
+        {
+            break;
+        }
 
-    // filter_graph = avfilter_graph_alloc();
+        NV21_YUV420P(input_frame, frame_buffer, video_width, video_height);
+        // input Y,U,V
+        video_frame->data[0] = frame_buffer;
+        video_frame->data[1] = frame_buffer + video_width * video_height;
+        video_frame->data[2] = frame_buffer + ((video_width * video_height * 5) >> 2);
 
-    // /* buffer video source: the decoded frames from the decoder will be inserted here. */
+        if (av_buffersrc_add_frame(inputContexts[1], video_frame) < 0)
+        {
+            printf("Error while add frame.\n");
+            exit(EXIT_FAILURE);
+        }
+        if (av_buffersrc_add_frame(inputContexts[0], bg_frame) < 0)
+        {
+            printf("Error while add frame.\n");
+            break;
+        }
 
-    // ret = avfilter_graph_create_filter(&buffersrc_ctx, buffersrc, "in",
-    //                                    args, NULL, filter_graph);
-    // if (ret < 0)
-    // {
-    //     printf("Cannot create buffer source\n");
-    //     return ret;
-    // }
+        /* pull filtered pictures from the filtergraph */
+        ret = av_buffersink_get_frame(outputContext, frame_out);
+        if (ret < 0)
+            break;
 
-    // /* buffer video sink: to terminate the filter chain. */
-    // buffersink_params = av_buffersink_params_alloc();
-    // buffersink_params->pixel_fmts = pix_fmts;
-    // ret = avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out",
-    //                                    NULL, buffersink_params, filter_graph);
-    // av_free(buffersink_params);
-    // if (ret < 0)
-    // {
-    //     printf("Cannot create buffer sink\n");
-    //     return ret;
-    // }
+        unsigned char dest[output_size];
+        YUV420P_NV21(frame_out, dest);
+        fwrite(dest, 1, output_size, fp_out);
 
-    // /* Endpoints for the filter graph. */
-    // outputs->name = av_strdup("in");
-    // outputs->filter_ctx = buffersrc_ctx;
-    // outputs->pad_idx = 0;
-    // outputs->next = NULL;
+        av_frame_unref(frame_out);
+    }
 
-    // inputs->name = av_strdup("out");
-    // inputs->filter_ctx = buffersink_ctx;
-    // inputs->pad_idx = 0;
-    // inputs->next = NULL;
+    fclose(fp_in);
+    fclose(fp_in_nv21);
+    fclose(fp_out);
 
-    // if ((ret = avfilter_graph_parse_ptr(filter_graph, filter_descr,
-    //                                     &inputs, &outputs, NULL)) < 0)
-    //     return ret;
-
-    // if ((ret = avfilter_graph_config(filter_graph, NULL)) < 0)
-    //     return ret;
-
-    // frame_in = av_frame_alloc();
-    // int image_buffer_size = av_image_get_buffer_size(AV_PIX_FMT_YUV420P, in_width, in_height, 1);
-
-    // unsigned char *frame_buffer = (unsigned char *)av_malloc(image_buffer_size);
-    // av_image_fill_arrays(frame_in->data, frame_in->linesize, frame_buffer,
-    //                      AV_PIX_FMT_YUV420P, in_width, in_height, 1);
-
-    // frame_out = av_frame_alloc();
-    // frame_buffer_out = (unsigned char *)av_malloc(image_buffer_size);
-    // av_image_fill_arrays(frame_out->data, frame_out->linesize, frame_buffer_out,
-    //                      AV_PIX_FMT_YUV420P, in_width, in_height, 1);
-
-    // frame_in->width = in_width;
-    // frame_in->height = in_height;
-    // frame_in->format = AV_PIX_FMT_YUV420P;
-
-    // unsigned char *input_frame = (unsigned char *)av_malloc(
-    //     av_image_get_buffer_size(AV_PIX_FMT_NV21, in_width, in_height, 1));
-
-    // int output_size = (in_width * in_height * 3) >> 1;
-    // while (1)
-    // {
-    //     if (fread(input_frame, 1, output_size, fp_in) != output_size)
-    //     {
-    //         break;
-    //     }
-
-    //     NV21_YUV420P(input_frame, frame_buffer, in_width, in_height);
-    //     // input Y,U,V
-    //     frame_in->data[0] = frame_buffer;
-    //     frame_in->data[1] = frame_buffer + in_width * in_height;
-    //     frame_in->data[2] = frame_buffer + ((in_width * in_height * 5) >> 2);
-
-    //     if (av_buffersrc_add_frame(buffersrc_ctx, frame_in) < 0)
-    //     {
-    //         printf("Error while add frame.\n");
-    //         break;
-    //     }
-
-    //     /* pull filtered pictures from the filtergraph */
-    //     ret = av_buffersink_get_frame(buffersink_ctx, frame_out);
-    //     if (ret < 0)
-    //         break;
-
-    //     unsigned char dest[output_size];
-    //     YUV420P_NV21(frame_out, dest);
-    //     fwrite(dest, 1, output_size, fp_out);
-
-    //     printf("Process 1 frame!\n");
-    //     av_frame_unref(frame_out);
-    // }
-
-    // fclose(fp_in);
-    // fclose(fp_out);
-
-    // av_frame_free(&frame_in);
-    // av_frame_free(&frame_out);
-    // avfilter_graph_free(&filter_graph);
+    av_frame_free(&bg_frame);
+    av_frame_free(&video_frame);
+    av_frame_free(&frame_out);
+    avfilter_graph_free(&graph);
 
     return 0;
 }

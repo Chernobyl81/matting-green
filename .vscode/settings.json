@@ -1,7 +1,13 @@
 {
     "files.associations": {
         "avformat.h": "c",
-        "imgutils.h": "c"
+        "imgutils.h": "c",
+        "functional": "c"
     },
-    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools"
+    "C_Cpp.default.configurationProvider": "ms-vscode.cmake-tools",
+    "dotnetAcquisitionExtension.installTimeoutValue": 720,
+    "dotnetAcquisitionExtension.existingDotnetPath": [
+        {"extensionId": "msazurermtools.azurerm-vscode-tools", "path": "/usr/bin/dotnet"}
+    ]
+    
 }
