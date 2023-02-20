@@ -190,6 +190,12 @@ end:
     avformat_close_input(&ifmt_ctx);
 }
 
+static void create_filter_spec(char *spec, int size, int width, int height)
+{
+    snprintf(spec, size, "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1",
+             width, height, AV_PIX_FMT_YUV420P);
+}
+
 static int initFilters(int bg_width, int bg_height, int video_width, int video_height)
 {
     // int i;
@@ -206,28 +212,29 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
         return -1;
     }
 
-    snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1", bg_width, bg_height, AV_PIX_FMT_YUV420P);
+    create_filter_spec(args, sizeof(args), bg_width, bg_height);
     const AVFilter *buffersrc_1 = avfilter_get_by_name("buffer");
     avfilter_graph_create_filter(&buffersrc_ctx_1, buffersrc_1, "in_1", args, NULL, graph);
 
-    snprintf(args2, sizeof(args2), "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1", video_width, video_height, AV_PIX_FMT_YUV420P);
+    create_filter_spec(args2, sizeof(args2), video_width, video_height);
     const AVFilter *buffersrc_2 = avfilter_get_by_name("buffer");
     avfilter_graph_create_filter(&buffersrc_ctx_2, buffersrc_2, "in_2", args2, NULL, graph);
 
-    AVBufferSinkParams *bufferSink_params;
     const AVFilter *buffersink = avfilter_get_by_name("buffersink");
-    enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
-    bufferSink_params = av_buffersink_params_alloc();
-    bufferSink_params->pixel_fmts = pix_fmts;
-    avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", NULL, bufferSink_params, graph);
+    AVBufferSinkParams *bufferSink_params;
+
+    // enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
+    // bufferSink_params = av_buffersink_params_alloc();
+    // bufferSink_params->pixel_fmts = pix_fmts;
+    avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", NULL, NULL, graph);
 
     // chromakey filter
-    AVFilter *chroma_filer = avfilter_get_by_name("chromakey");
+    const AVFilter *chroma_filer = avfilter_get_by_name("chromakey");
     AVFilterContext *chroma_filer_ctx;
     avfilter_graph_create_filter(&chroma_filer_ctx, chroma_filer, "chout", "0x008c45:0.15:0.1", NULL, graph);
 
     // overlay filter
-    AVFilter *overlay_filter = avfilter_get_by_name("overlay");
+    const AVFilter *overlay_filter = avfilter_get_by_name("overlay");
     AVFilterContext *overlay_filter_ctx;
     avfilter_graph_create_filter(&overlay_filter_ctx, overlay_filter, "overlay", NULL, NULL, graph);
 
@@ -334,7 +341,7 @@ int main(int argc, char **argv)
         av_image_get_buffer_size(AV_PIX_FMT_NV21, video_width, video_height, 1));
 
     int output_size = (video_width * video_height * 3) >> 1;
-    
+
     while (1)
     {
         if (fread(input_frame, 1, output_size, fp_in_nv21) != output_size)
