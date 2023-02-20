@@ -222,10 +222,6 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
 
     const AVFilter *buffersink = avfilter_get_by_name("buffersink");
     AVBufferSinkParams *bufferSink_params;
-
-    // enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
-    // bufferSink_params = av_buffersink_params_alloc();
-    // bufferSink_params->pixel_fmts = pix_fmts;
     avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", NULL, NULL, graph);
 
     // chromakey filter
