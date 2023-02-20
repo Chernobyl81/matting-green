@@ -20,8 +20,11 @@ typedef struct StreamContext
 } StreamContext;
 static StreamContext *stream_ctx;
 
-static AVFilterContext **inputContexts;
-static AVFilterContext *outputContext;
+// static AVFilterContext **inputContexts;
+// static AVFilterContext *outputContext;
+static AVFilterContext *buffersrc_ctx_1;
+static AVFilterContext *buffersrc_ctx_2;
+static AVFilterContext *buffersink_ctx;
 static AVFilterGraph *graph;
 
 /**
@@ -59,7 +62,6 @@ static void NV21_YUV420P(const unsigned char *image_src, unsigned char *image_ds
  */
 static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
 {
-    av_log(NULL, AV_LOG_DEBUG, "Convert YUV420P to NV21\n");
 
     int shape = frame_out->width * frame_out->height;
 
@@ -80,9 +82,6 @@ static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
             *pNV++ = *pU++;
         }
     }
-    // av_image_copy_to_buffer(image_dst, frame_out->width * frame_out->height * 3 / 2,
-    //                         frame_out->data, frame_out->linesize, AV_PIX_FMT_YUV420P, frame_out->width,
-    //                         frame_out->height, 1);
 }
 
 static int open_input_file(const char *filename)
@@ -193,9 +192,10 @@ end:
 
 static int initFilters(int bg_width, int bg_height, int video_width, int video_height)
 {
-    int i;
+    // int i;
     int returnCode;
-    char filter_specs[1024];
+    char args[512];
+    char args2[512];
     AVFilterInOut *gis = NULL;
     AVFilterInOut *gos = NULL;
 
@@ -206,18 +206,49 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
         return -1;
     }
 
-    snprintf(filter_specs, sizeof(filter_specs),
-             "buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_1];\
-    buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_2];\
-    [in_2]chromakey=0x008c45:0.15:0.1[ckout];[in_1][ckout]overlay[out];[out]buffersink",
-             bg_width, bg_height, AV_PIX_FMT_YUV420P, video_width, video_height, AV_PIX_FMT_YUV420P);
+    // snprintf(filter_specs, sizeof(filter_specs),
+    //          "buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_1];\
+    // buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_2];\
+    // [in_2]chromakey=0x008c45:0.15:0.1[ckout];[in_1][ckout]overlay[out];[out]buffersink",
+    //          bg_width, bg_height, AV_PIX_FMT_YUV420P, video_width, video_height, AV_PIX_FMT_YUV420P);
 
-    returnCode = avfilter_graph_parse2(graph, filter_specs, &gis, &gos);
-    if (returnCode < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "Cannot parse graph %d\n", returnCode);
-        return returnCode;
-    }
+    // returnCode = avfilter_graph_parse2(graph, filter_specs, &gis, &gos);
+    // if (returnCode < 0)
+    // {
+    //     av_log(NULL, AV_LOG_ERROR, "Cannot parse graph %d\n", returnCode);
+    //     return returnCode;
+    // }
+
+    snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1", bg_width, bg_height, AV_PIX_FMT_YUV420P);
+    const AVFilter *buffersrc_1 = avfilter_get_by_name("buffer");
+    avfilter_graph_create_filter(&buffersrc_ctx_1, buffersrc_1, "in_1", args, NULL, graph);
+
+    snprintf(args2, sizeof(args2), "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1", video_width, video_height, AV_PIX_FMT_YUV420P);
+    const AVFilter *buffersrc_2 = avfilter_get_by_name("buffer");
+    avfilter_graph_create_filter(&buffersrc_ctx_2, buffersrc_2, "in_2", args2, NULL, graph);
+
+    AVBufferSinkParams *bufferSink_params;
+    const AVFilter *buffersink = avfilter_get_by_name("buffersink");
+    enum AVPixelFormat pix_fmts[] = {AV_PIX_FMT_YUV420P, AV_PIX_FMT_NONE};
+    bufferSink_params = av_buffersink_params_alloc();
+    bufferSink_params->pixel_fmts = pix_fmts;
+    avfilter_graph_create_filter(&buffersink_ctx, buffersink, "out", NULL, bufferSink_params, graph);
+
+    // chromakey filter
+    AVFilter *chroma_filer = avfilter_get_by_name("chromakey");
+    AVFilterContext *chroma_filer_ctx;
+    avfilter_graph_create_filter(&chroma_filer_ctx, chroma_filer, "chout", "0x008c45:0.15:0.1", NULL, graph);
+
+    // overlay filter
+    AVFilter *overlay_filter = avfilter_get_by_name("overlay");
+    AVFilterContext *overlay_filter_ctx;
+    avfilter_graph_create_filter(&overlay_filter_ctx, overlay_filter, "overlay", NULL, NULL, graph);
+
+    
+    avfilter_link(buffersrc_ctx_2, 0, chroma_filer_ctx, 0);
+    avfilter_link(chroma_filer_ctx, 0, overlay_filter_ctx, 1);
+    avfilter_link(buffersrc_ctx_1, 0, overlay_filter_ctx, 0);
+    avfilter_link(overlay_filter_ctx, 0, buffersink_ctx, 0);
 
     returnCode = avfilter_graph_config(graph, NULL);
     if (returnCode < 0)
@@ -227,14 +258,7 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
     }
 
     av_log(NULL, AV_LOG_DEBUG, "Graph %s\n", avfilter_graph_dump(graph, NULL));
-    
-    // get the filter contexts from the graph here
-    inputContexts = graph->filters;
-    outputContext = graph->filters[graph->nb_filters - 1];
-    if (!outputContext)
-    {
-        av_log(NULL, AV_LOG_ERROR, "outputContext is NULL\n");
-    }
+
     return 0;
 }
 
@@ -337,19 +361,19 @@ int main(int argc, char **argv)
         video_frame->data[1] = frame_buffer + video_width * video_height;
         video_frame->data[2] = frame_buffer + ((video_width * video_height * 5) >> 2);
 
-        if (av_buffersrc_add_frame(inputContexts[1], video_frame) < 0)
-        {
-            printf("Error while add frame.\n");
-            exit(EXIT_FAILURE);
-        }
-        if (av_buffersrc_add_frame(inputContexts[0], bg_frame) < 0)
+        if (av_buffersrc_add_frame(buffersrc_ctx_2, video_frame) < 0)
         {
             printf("Error while add frame.\n");
             break;
         }
 
+        if (av_buffersrc_add_frame(buffersrc_ctx_1, bg_frame) < 0)
+        {
+            printf("Error while add frame.\n");
+            exit(EXIT_FAILURE);
+        }
         /* pull filtered pictures from the filtergraph */
-        ret = av_buffersink_get_frame(outputContext, frame_out);
+        ret = av_buffersink_get_frame(buffersink_ctx, frame_out);
         if (ret < 0)
             break;
 
