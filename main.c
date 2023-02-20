@@ -206,19 +206,6 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
         return -1;
     }
 
-    // snprintf(filter_specs, sizeof(filter_specs),
-    //          "buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_1];\
-    // buffer=video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1[in_2];\
-    // [in_2]chromakey=0x008c45:0.15:0.1[ckout];[in_1][ckout]overlay[out];[out]buffersink",
-    //          bg_width, bg_height, AV_PIX_FMT_YUV420P, video_width, video_height, AV_PIX_FMT_YUV420P);
-
-    // returnCode = avfilter_graph_parse2(graph, filter_specs, &gis, &gos);
-    // if (returnCode < 0)
-    // {
-    //     av_log(NULL, AV_LOG_ERROR, "Cannot parse graph %d\n", returnCode);
-    //     return returnCode;
-    // }
-
     snprintf(args, sizeof(args), "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1", bg_width, bg_height, AV_PIX_FMT_YUV420P);
     const AVFilter *buffersrc_1 = avfilter_get_by_name("buffer");
     avfilter_graph_create_filter(&buffersrc_ctx_1, buffersrc_1, "in_1", args, NULL, graph);
@@ -244,7 +231,7 @@ static int initFilters(int bg_width, int bg_height, int video_width, int video_h
     AVFilterContext *overlay_filter_ctx;
     avfilter_graph_create_filter(&overlay_filter_ctx, overlay_filter, "overlay", NULL, NULL, graph);
 
-    
+    // link filters to graph
     avfilter_link(buffersrc_ctx_2, 0, chroma_filer_ctx, 0);
     avfilter_link(chroma_filer_ctx, 0, overlay_filter_ctx, 1);
     avfilter_link(buffersrc_ctx_1, 0, overlay_filter_ctx, 0);
@@ -347,7 +334,7 @@ int main(int argc, char **argv)
         av_image_get_buffer_size(AV_PIX_FMT_NV21, video_width, video_height, 1));
 
     int output_size = (video_width * video_height * 3) >> 1;
-    // AVFilter const *buffersink = avfilter_get_by_name("buffersink");
+    
     while (1)
     {
         if (fread(input_frame, 1, output_size, fp_in_nv21) != output_size)
