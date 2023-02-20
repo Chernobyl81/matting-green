@@ -1,6 +1,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <time.h>
 
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
@@ -262,6 +263,9 @@ int main(int argc, char **argv)
         exit(EXIT_FAILURE);
     }
 
+    time_t start_time, finish_time;
+    double diff_time;
+
     int video_width = 1024;
     int video_height = 576;
 
@@ -344,7 +348,7 @@ int main(int argc, char **argv)
         {
             break;
         }
-
+        time(&start_time);
         NV21_YUV420P(input_frame, frame_buffer, video_width, video_height);
         // input Y,U,V
         video_frame->data[0] = frame_buffer;
@@ -372,6 +376,10 @@ int main(int argc, char **argv)
         fwrite(dest, 1, output_size, fp_out);
 
         av_frame_unref(frame_out);
+        time(&finish_time);
+
+        diff_time = difftime(finish_time, start_time);
+        av_log(NULL, AV_LOG_DEBUG, "Execution time = %f\n", diff_time);
     }
 
     fclose(fp_in);

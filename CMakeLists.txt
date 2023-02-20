@@ -6,6 +6,8 @@ include(CTest)
 enable_testing()
 
 add_executable(${PROJECT_NAME} main.c)
+target_include_directories(${PROJECT_NAME} PUBLIC /usr/local/ffmpeg/include)
+target_link_directories(${PROJECT_NAME} PRIVATE /usr/local/ffmpeg/lib)
 target_link_libraries(${PROJECT_NAME} PRIVATE avfilter avcodec avformat avutil)
 
 set(CPACK_PROJECT_NAME ${PROJECT_NAME})
