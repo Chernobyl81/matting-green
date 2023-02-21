@@ -11,18 +11,6 @@
 #include <libavutil/pixdesc.h>
 #include <libavutil/imgutils.h>
 
-static AVFormatContext *ifmt_ctx;
-typedef struct StreamContext
-{
-    AVCodecContext *dec_ctx;
-    AVCodecContext *enc_ctx;
-
-    AVFrame *dec_frame;
-} StreamContext;
-static StreamContext *stream_ctx;
-
-// static AVFilterContext **inputContexts;
-// static AVFilterContext *outputContext;
 static AVFilterContext *buffersrc_ctx_1;
 static AVFilterContext *buffersrc_ctx_2;
 static AVFilterContext *buffersink_ctx;
@@ -85,112 +73,6 @@ static void YUV420P_NV21(const AVFrame *frame_out, unsigned char *image_dst)
     }
 }
 
-static int open_input_file(const char *filename)
-{
-    int ret;
-    ifmt_ctx = NULL;
-    if ((ret = avformat_open_input(&ifmt_ctx, filename, NULL, NULL)) < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "Cannot open input file\n");
-        return ret;
-    }
-
-    if ((ret = avformat_find_stream_info(ifmt_ctx, NULL)) < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "Cannot find stream information\n");
-        return ret;
-    }
-
-    stream_ctx = av_mallocz_array(ifmt_ctx->nb_streams, sizeof(*stream_ctx));
-    if (!stream_ctx)
-        return AVERROR(ENOMEM);
-
-    for (unsigned int i = 0; i < ifmt_ctx->nb_streams; i++)
-    {
-        AVStream *stream = ifmt_ctx->streams[i];
-        AVCodec const *dec = avcodec_find_decoder(stream->codecpar->codec_id);
-        AVCodecContext *codec_ctx;
-        if (!dec)
-        {
-            av_log(NULL, AV_LOG_ERROR, "Failed to find decoder for stream #%u\n", i);
-            return AVERROR_DECODER_NOT_FOUND;
-        }
-        codec_ctx = avcodec_alloc_context3(dec);
-        if (!codec_ctx)
-        {
-            av_log(NULL, AV_LOG_ERROR, "Failed to allocate the decoder context for stream #%u\n", i);
-            return AVERROR(ENOMEM);
-        }
-        ret = avcodec_parameters_to_context(codec_ctx, stream->codecpar);
-        if (ret < 0)
-        {
-            av_log(NULL, AV_LOG_ERROR, "Failed to copy decoder parameters to input decoder context "
-                                       "for stream #%u\n",
-                   i);
-            return ret;
-        }
-        /* Reencode video & audio and remux subtitles etc. */
-        if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO || codec_ctx->codec_type == AVMEDIA_TYPE_AUDIO)
-        {
-            if (codec_ctx->codec_type == AVMEDIA_TYPE_VIDEO)
-                codec_ctx->framerate = av_guess_frame_rate(ifmt_ctx, stream, NULL);
-
-            /* Open decoder */
-            ret = avcodec_open2(codec_ctx, dec, NULL);
-            if (ret < 0)
-            {
-                av_log(NULL, AV_LOG_ERROR, "Failed to open decoder for stream #%u\n", i);
-                return ret;
-            }
-        }
-
-        stream_ctx[i].dec_ctx = codec_ctx;
-        stream_ctx[i].dec_frame = av_frame_alloc();
-        if (!stream_ctx[i].dec_frame)
-            return AVERROR(ENOMEM);
-    }
-
-    av_dump_format(ifmt_ctx, 0, filename, 0);
-    return 0;
-}
-
-static void decode_jpg(const char *filename)
-{
-    int ret;
-
-    if (open_input_file(filename) < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "can not open file\n");
-    }
-    AVPacket *pkt = av_packet_alloc();
-    if (!pkt)
-    {
-        av_log(NULL, AV_LOG_ERROR, "alloc packet error\n");
-        goto end;
-    }
-
-    if ((ret = av_read_frame(ifmt_ctx, pkt)) < 0)
-    {
-        av_log(NULL, AV_LOG_ERROR, "can not read frame\n");
-        goto end;
-    }
-
-    unsigned int stream_index = pkt->stream_index;
-    StreamContext *stream = &stream_ctx[stream_index];
-    avcodec_send_packet(stream->dec_ctx, pkt);
-    avcodec_receive_frame(stream->dec_ctx, stream->dec_frame);
-
-end:
-    av_packet_free(&pkt);
-    for (int i = 0; i < ifmt_ctx->nb_streams; i++)
-    {
-        avcodec_free_context(&stream_ctx[i].dec_ctx);
-        av_frame_free(&stream_ctx[i].dec_frame);
-    }
-    av_free(stream_ctx);
-    avformat_close_input(&ifmt_ctx);
-}
-
 static void create_filter_spec(char *spec, int size, int width, int height)
 {
     snprintf(spec, size, "video_size=%dx%d:pix_fmt=%d:time_base=1/25:pixel_aspect=1/1",
@@ -199,7 +81,7 @@ static void create_filter_spec(char *spec, int size, int width, int height)
 
 static int initFilters(int bg_width, int bg_height, int video_width, int video_height)
 {
-    // int i;
+
     int returnCode;
     char args[512];
     char args2[512];
@@ -264,8 +146,7 @@ int main(int argc, char **argv)
     }
 
     time_t start_time, finish_time;
-    double diff_time;
-
+   
     int video_width = 1024;
     int video_height = 576;
 
@@ -342,13 +223,15 @@ int main(int argc, char **argv)
 
     int output_size = (video_width * video_height * 3) >> 1;
 
+    int nFrames = 0;
     while (1)
     {
         if (fread(input_frame, 1, output_size, fp_in_nv21) != output_size)
         {
             break;
         }
-        time(&start_time);
+        
+        start_time = time(NULL);
         NV21_YUV420P(input_frame, frame_buffer, video_width, video_height);
         // input Y,U,V
         video_frame->data[0] = frame_buffer;
@@ -376,10 +259,12 @@ int main(int argc, char **argv)
         fwrite(dest, 1, output_size, fp_out);
 
         av_frame_unref(frame_out);
-        time(&finish_time);
+        finish_time = time(NULL);
 
-        diff_time = difftime(finish_time, start_time);
-        av_log(NULL, AV_LOG_DEBUG, "Execution time = %f\n", diff_time);
+        double diff_time = difftime(finish_time, start_time);
+        nFrames++;
+        if (diff_time >= 1.0)
+            av_log(NULL, AV_LOG_DEBUG, "%f ms/frame\n", 1000.0/(double)nFrames);
     }
 
     fclose(fp_in);
